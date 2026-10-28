@@ -4,16 +4,15 @@ import { supabase } from './supabase';
 import {
   CalendarDays, ChevronRight, ClipboardList, Download, HeartHandshake,
   Home as HomeIcon, LogIn, LogOut, Menu, MessageSquareHeart, Search,
-  ShieldCheck, Users, Utensils, X,
+  Archive, Trash2, ShieldCheck, Users, Utensils, X,
 } from 'lucide-react';
 import './styles.css';
 
 type Page = 'home' | 'register' | 'survey' | 'admin' | 'success';
 
 type Registration = {
-  id: string; created_at: string; first_name: string; last_name?: string; food_options: string[]; archived_at: string | null;
-  phone: string; email: string | null; family_size: number;
-  distribution_date: string | null; status: string;
+  id: string; created_at: string; first_name: string; last_name: string;
+  family_size: number; distribution_date: string | null; archived_at: string | null;
 };
 
 type Survey = {
@@ -23,7 +22,6 @@ type Survey = {
 };
 
 type Distribution = { month: string; slot: number; date: string; time: string };
-const foods = ['Fresh Produce','Frozen Foods','Drinks & Household Items','Food & Beverages','Dairy & Eggs'];
 function todayLagos() { const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()); const part=(name:string)=>parts.find(item=>item.type===name)!.value; return `${part('year')}-${part('month')}-${part('day')}`; }
 function defaults(month:string):Distribution[] {
   const [year,n]=month.split('-').map(Number);
@@ -31,9 +29,21 @@ function defaults(month:string):Distribution[] {
   return [first,first+14].map((day,i)=>({month,slot:i+1,date:`${month}-${String(day).padStart(2,'0')}`,time:'10:00 AM – 1:00 PM'}));
 }
 function labelDate(date:string) { return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}); }
+function availableDistributions(dates:Distribution[],today:string) {
+  return dates.filter(item=>{
+    const first=dates.find(row=>row.month===item.month&&row.slot===1);
+    return item.date>=today && (item.slot===1 || (!!first && today>first.date));
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+}
 function useSchedule() {
   const [today,setToday]=useState(todayLagos()); const [dates,setDates]=useState<Distribution[]>([]);
-  useEffect(()=>{const timer=setInterval(()=>setToday(todayLagos()),60000);return()=>clearInterval(timer);},[]);
+  const [scheduleVersion,setScheduleVersion]=useState(0);
+  useEffect(()=>{
+    const refresh=()=>{setToday(todayLagos());setScheduleVersion(version=>version+1);};
+    const timer=setInterval(()=>setToday(todayLagos()),60000);
+    window.addEventListener('pantry-schedule-updated',refresh);window.addEventListener('focus',refresh);
+    return()=>{clearInterval(timer);window.removeEventListener('pantry-schedule-updated',refresh);window.removeEventListener('focus',refresh);};
+  },[]);
   useEffect(()=>{let active=true;const month=today.slice(0,7);
     const next=new Date(`${month}-01T12:00:00Z`);next.setUTCMonth(next.getUTCMonth()+1);
     const months=[month,next.toISOString().slice(0,7)];
@@ -42,7 +52,7 @@ function useSchedule() {
         if(data)items=items.map(item=>data.find(row=>row.month===item.month&&row.slot===item.slot)||item);}
       if(active)setDates(items);
     })();return()=>{active=false};
-  },[today.slice(0,7)]);
+  },[today,scheduleVersion]);
   return {today,dates,setDates};
 }
 function Brand(){return <><img className="brandmark" src="/rccg-logo.png" alt="RCCG logo"/><span><b>RCCG</b><small>SOLUTION CENTER FOR ALL NATIONS · FOOD PANTRY</small></span></>}
@@ -106,14 +116,14 @@ function Home({ go, dates, today }: { go: (page: Page) => void; dates: Distribut
     </section>
 
     <section className="section">
-      <div className="sectionHead"><span className="eyebrow">PANTRY SCHEDULE</span><h2>Plan your visit</h2><p>Choose an upcoming distribution date when registration is open.</p></div>
+      <div className="sectionHead"><span className="eyebrow">PANTRY SCHEDULE</span><h2>Plan your visit</h2><p>Check the upcoming distribution dates before your visit.</p></div>
       <div className="schedule">{dates.filter(item=>item.date>=today).slice(0,2).map(item=><div className="scheduleCard" key={item.date}><div className="dateIcon"><CalendarDays/></div><div><b>{item.slot===1?'First':'Third'} Saturday</b><h3>{labelDate(item.date)}</h3><p>{item.time}</p></div></div>)}</div>
     </section>
 
     <section className="blueBand">
       <div><span className="eyebrow light">HOW IT WORKS</span><h2>Simple from registration to distribution.</h2></div>
       <div className="steps">{[
-        ['01','Register','Tell us your name, contact details and family size.'],
+        ['01','Register','Tell us your first name, last name, family size and preferred distribution date.'],
         ['02','Prepare','Review your selected distribution date and arrive during the stated time.'],
         ['03','Share','Complete a short survey so we can serve the community better.'],
       ].map(([number,title,description])=><div className="step" key={number}><span>{number}</span><h3>{title}</h3><p>{description}</p></div>)}</div>
@@ -126,41 +136,54 @@ function Home({ go, dates, today }: { go: (page: Page) => void; dates: Distribut
   </main>;
 }
 
-function Register({ onDone, dates, today }: { onDone: (id: string) => void; dates: Distribution[]; today:string }) {
-  const [form,setForm]=useState({first_name:'',phone:'',email:'',family_size:'1',distribution_date:'',food_options:[] as string[]});
+function Register({ onDone, dates, today }: { onDone: (id: string) => void; dates:Distribution[]; today:string }) {
+  const [form,setForm]=useState({first_name:'',last_name:'',family_size:'',distribution_date:''});
   const [loading,setLoading]=useState(false); const [message,setMessage]=useState('');
+  const availableDates=useMemo(()=>availableDistributions(dates,today),[dates,today]);
+  useEffect(()=>{
+    setForm(current=>current.distribution_date && !availableDates.some(item=>item.date===current.distribution_date)
+      ? {...current,distribution_date:''}:current);
+  },[availableDates]);
   async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setLoading(true); setMessage('');
+    event.preventDefault(); setMessage('');
+    const firstName=form.first_name.trim(); const lastName=form.last_name.trim();
+    if(!firstName || !lastName){setMessage('Please enter your first name and last name.');return;}
+    const familySize=Number(form.family_size);
+    if(!Number.isInteger(familySize) || familySize<1 || familySize>30){setMessage('Please select your family size.');return;}
+    if(!availableDates.some(item=>item.date===form.distribution_date)){setMessage('Please select an available distribution date.');return;}
+    setLoading(true);
     if (!supabase) { setMessage('Connect Supabase using .env.local before submitting.'); setLoading(false); return; }
     const id=crypto.randomUUID();
-    const {error}=await supabase.from('registrations').insert({
-      id,
-      first_name:form.first_name,phone:form.phone,food_options:form.food_options,
-      email:form.email||null,family_size:Number(form.family_size),
-      distribution_date:form.distribution_date,
-    });
-    if(error){setMessage(error.message);setLoading(false);return;}
-    onDone(id); setLoading(false);
+    try {
+      const {error}=await supabase.from('registrations').insert({
+        id, first_name:firstName, last_name:lastName, family_size:familySize, distribution_date:form.distribution_date,
+      });
+      if(error){setMessage(error.message);return;}
+      onDone(id);
+    } catch { setMessage('Unable to submit your registration. Please try again.'); }
+    finally { setLoading(false); }
   }
   return <main className="formPage"><div className="formWrap">
     <span className="eyebrow">REGISTRATION</span><h1>Register for food distribution</h1>
     <p className="lead">Please provide accurate information so the pantry team can plan for your household.</p>
     <form onSubmit={submit}>
-      <label>Name<input required value={form.first_name} onChange={e=>setForm({...form,first_name:e.target.value})}/></label>
       <div className="grid2">
-        <label>Phone number<input required type="tel" value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/></label>
-        <label>Email <span>(optional)</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></label>
+        <label>First name<input required maxLength={100} autoComplete="given-name" value={form.first_name} onChange={e=>setForm({...form,first_name:e.target.value})}/></label>
+        <label>Last name<input required maxLength={100} autoComplete="family-name" value={form.last_name} onChange={e=>setForm({...form,last_name:e.target.value})}/></label>
       </div>
       <div className="grid2">
-        <label>Family Size<input required min="1" max="30" type="number" value={form.family_size} onChange={e=>setForm({...form,family_size:e.target.value})}/></label>
-        <label>Preferred distribution date<select required value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
-          <option value="">Select a date</option>{dates.filter(item=>item.date>=today && (item.slot===1 || today>dates.find(first=>first.month===item.month&&first.slot===1)!.date)).map(item=><option key={item.date} value={item.date}>{labelDate(item.date)} · {item.time}</option>)}
+        <label>Family Size<select required value={form.family_size} onChange={e=>setForm({...form,family_size:e.target.value})}>
+          <option value="">Select your family size</option>
+          {Array.from({length:30},(_,i)=>i+1).map(size=><option key={size} value={size}>{size}</option>)}
+        </select></label>
+        <label>Preferred Distribution Date<select required disabled={!availableDates.length} value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
+          <option value="">Select a date</option>
+          {availableDates.map(item=><option key={item.date} value={item.date}>{labelDate(item.date)} · {item.time}</option>)}
         </select></label>
       </div>
-      <fieldset className="foodField"><legend>Food options</legend><div className="checks">{foods.map(food=><label className="check" key={food}><input type="checkbox" checked={form.food_options.includes(food)} onChange={()=>setForm({...form,food_options:form.food_options.includes(food)?form.food_options.filter(x=>x!==food):[...form.food_options,food]})}/>{food}</label>)}</div></fieldset>
-      <div className="notice"><ShieldCheck size={18}/><span>Your information is used by the pantry team for distribution and planning.</span></div>
-      {message&&<div className="error">{message}</div>}
-      <button className="primary full" disabled={loading} type="submit">{loading?'Submitting…':'Complete registration'} <ChevronRight/></button>
+      <div className="notice"><ShieldCheck size={18}/><span>Your information is used by the pantry team for distribution and planning only!</span></div>
+      {message&&<div className="error" role="alert">{message}</div>}
+      <button className="primary full" disabled={loading||!availableDates.length} type="submit">{loading?'Submitting…':'Complete registration'} <ChevronRight/></button>
     </form>
   </div></main>;
 }
@@ -195,8 +218,10 @@ function Admin() {
   const [email,setEmail]=useState(''); const [password,setPassword]=useState(''); const [session,setSession]=useState<any>(null);
   const [registrations,setRegistrations]=useState<Registration[]>([]); const [surveys,setSurveys]=useState<Survey[]>([]);
   const [query,setQuery]=useState(''); const [loading,setLoading]=useState(false); const [error,setError]=useState('');
-  const [view,setView]=useState<'overview'|'registrations'|'feedback'|'analytics'|'schedule'>('overview');
-  const [showArchive,setShowArchive]=useState(false);
+  const [view,setView]=useState<'overview'|'registrations'|'feedback'|'analytics'|'schedule'|'archive'>('overview');
+  const [dataAction,setDataAction]=useState<'archive'|'reset'|null>(null);
+  const [actionMessage,setActionMessage]=useState('');
+  const loadVersion=React.useRef(0);
   const {dates,today,setDates}=useSchedule();
   const [editDates,setEditDates]=useState<Record<string,string>>({});
 
@@ -213,52 +238,68 @@ function Admin() {
     if(loginError)setError(loginError.message);setLoading(false);
   }
   async function loadDashboard(){
-    if(!supabase)return;setLoading(true);
+    if(!supabase)return;const version=++loadVersion.current;setLoading(true);
     async function fetchAll(table:'registrations'|'surveys'){
       const records:any[]=[];let offset=0;
-      while(true){const {data,error}=await supabase!.from(table).select('*').order('created_at',{ascending:false}).range(offset,offset+999);
+      while(true){const {data,error}=await supabase!.from(table).select('*').order('created_at',{ascending:false}).order('id',{ascending:true}).range(offset,offset+999);
         if(error)return {records:[],error};records.push(...(data||[]));if(!data||data.length<1000)break;offset+=1000;}
       return {records,error:null};
     }
     const [registrationResult,surveyResult]=await Promise.all([fetchAll('registrations'),fetchAll('surveys')]);
+    if(version!==loadVersion.current)return;
     if(!registrationResult.error)setRegistrations(registrationResult.records as Registration[]);else setError(registrationResult.error.message);
     if(!surveyResult.error)setSurveys(surveyResult.records as Survey[]);else setError(surveyResult.error.message);
     setLoading(false);
   }
 
-  const filteredRegistrations=useMemo(()=>{
-    const normalizedQuery=query.toLowerCase().trim(); if(!normalizedQuery)return registrations;
-    return registrations.filter(registration=>(showArchive || !registration.archived_at) && `${registration.first_name} ${registration.phone} ${registration.email||''}`.toLowerCase().includes(normalizedQuery));
-  },[registrations,query,showArchive]);
-
   const active=registrations.filter(item=>!item.archived_at);
   const activeSurveys=surveys.filter(item=>!item.archived_at);
-  const visibleSurveys=showArchive?surveys:activeSurveys;
+  const archivedRegistrations=registrations.filter(item=>!!item.archived_at);
+  const archivedSurveys=surveys.filter(item=>!!item.archived_at);
+  const filteredRegistrations=useMemo(()=>{
+    const normalizedQuery=query.toLowerCase().trim();
+    return registrations.filter(registration=>
+      (view==='archive'?!!registration.archived_at:!registration.archived_at) &&
+      `${registration.first_name} ${registration.last_name||''}`.toLowerCase().includes(normalizedQuery));
+  },[registrations,query,view]);
   const totalFamilyMembers=active.reduce((total,registration)=>total+Number(registration.family_size||0),0);
   const averageRating=activeSurveys.length>0?(activeSurveys.reduce((total,survey)=>total+Number(survey.rating||0),0)/activeSurveys.length).toFixed(1):'—';
   const countBy=(items:string[])=>Object.entries(items.reduce<Record<string,number>>((counts,item)=>{counts[item]=(counts[item]||0)+1;return counts;},{})).sort((a,b)=>b[1]-a[1]);
-  async function archiveNow(){
-    if(!supabase || !window.confirm('Archive all active registrations and feedback? The records will remain available in the archive.'))return;
-    const {error:archiveError}=await supabase.rpc('archive_pantry_now');
-    if(archiveError)setError(archiveError.message);else await loadDashboard();
+  async function manageData(action:'archive'|'reset'){
+    if(!supabase || dataAction)return;
+    const confirmation=action==='archive'
+      ? 'Archive all current registrations and feedback? They will be hidden from current lists and totals, and kept in the Archive tab.'
+      : 'Permanently delete ALL registrations and feedback, including archived records? This cannot be undone. Your admin account and distribution schedule will stay unchanged.';
+    if(!window.confirm(confirmation))return;
+    setDataAction(action);setError('');setActionMessage('');
+    try {
+      const {error:actionError}=await supabase.rpc(action==='archive'?'archive_pantry_now':'reset_pantry_data');
+      if(actionError){setError(actionError.message);return;}
+      if(action==='reset'){setRegistrations([]);setSurveys([]);}
+      setQuery('');setView(action==='archive'?'archive':'overview');
+      setActionMessage(action==='archive'?'Current registrations and feedback have been moved to the Archive tab.':'All registrations and feedback have been cleared, including archived records.');
+      await loadDashboard();
+    } catch { setError('Unable to complete the action. Please refresh and try again.'); }
+    finally { setDataAction(null); }
   }
   async function saveDate(item:Distribution){
     if(!supabase)return;const date=editDates[`${item.month}-${item.slot}`]||item.date;
     const {error:saveError}=await supabase.from('distribution_dates').upsert({month:item.month,slot:item.slot,date,time:item.time});
     if(saveError){setError(saveError.message);return;}
     setDates(current=>current.map(row=>row.month===item.month&&row.slot===item.slot?{...row,date}:row));setError('');
+    window.dispatchEvent(new Event('pantry-schedule-updated'));
   }
 
   function exportCSV(){
-    const rows=[['Name','Phone','Email','Family Size','Food Options','Distribution','Archive State','Registered'],
-      ...(showArchive?registrations:active).map(registration=>[
-        registration.first_name,registration.phone,registration.email||'',
-        String(registration.family_size),(registration.food_options||[]).join('; '),registration.distribution_date||'',registration.archived_at?'Archived':'Active',
+    const rows=[['First name','Last name','Family Size','Preferred Distribution Date','Registered','Archived'],
+      ...(view==='archive'?archivedRegistrations:active).map(registration=>[
+        registration.first_name,registration.last_name||'',String(registration.family_size),registration.distribution_date||'',
         new Date(registration.created_at).toLocaleString(),
+        registration.archived_at?new Date(registration.archived_at).toLocaleString():'',
       ])];
     const csvContent=rows.map(row=>row.map(value=>`"${String(value).replaceAll('"','""')}"`).join(',')).join('\n');
     const blob=new Blob([csvContent],{type:'text/csv;charset=utf-8;'});const url=URL.createObjectURL(blob);
-    const anchor=document.createElement('a');anchor.href=url;anchor.download='rccgsc-registrations.csv';
+    const anchor=document.createElement('a');anchor.href=url;anchor.download=view==='archive'?'rccgsc-archived-registrations.csv':'rccgsc-registrations.csv';
     document.body.appendChild(anchor);anchor.click();document.body.removeChild(anchor);URL.revokeObjectURL(url);
   }
 
@@ -275,38 +316,53 @@ function Admin() {
 
   return <main className="adminPage">
     <div className="adminTop"><div><span className="eyebrow">PANTRY ADMINISTRATION</span><h1>Dashboard</h1></div>
-      <div className="adminActions"><button className="secondary" onClick={exportCSV}><Download size={16}/> Export CSV</button>
+      <div className="adminActions">
+        <button className="secondary" onClick={()=>manageData('archive')} disabled={!!dataAction || loading || (!active.length&&!activeSurveys.length)}><Archive size={16}/>{dataAction==='archive'?'Archiving…':'Archive current data'}</button>
+        <button className="secondary danger" onClick={()=>manageData('reset')} disabled={!!dataAction || loading || (!registrations.length&&!surveys.length)}><Trash2 size={16}/>{dataAction==='reset'?'Resetting…':'Reset all data'}</button>
+        <button className="secondary" onClick={exportCSV}><Download size={16}/> Export CSV</button>
         <button className="iconBtn" onClick={()=>supabase?.auth.signOut()} aria-label="Sign out"><LogOut/></button></div>
     </div>
-    {error&&<div className="error adminError">{error}</div>}
+    {error&&<div className="error adminError" role="alert">{error}</div>}
+    {actionMessage&&<div className="adminSuccess" role="status">{actionMessage}</div>}
     <div className="metrics">
       <button onClick={()=>setView('registrations')}><Users/><span>Total registrations</span><strong>{active.length}</strong></button>
       <button onClick={()=>setView('registrations')}><HomeIcon/><span>Total family size</span><strong>{totalFamilyMembers}</strong></button>
       <button onClick={()=>setView('feedback')}><MessageSquareHeart/><span>Feedback responses</span><strong>{activeSurveys.length}</strong></button>
       <div><ClipboardList/><span>Avg. rating</span><strong>{averageRating}</strong></div>
     </div>
-    <div className="adminTabs">{(['overview','registrations','feedback','analytics','schedule'] as const).map(tab=><button key={tab} className={view===tab?'active':''} onClick={()=>setView(tab)}>{tab[0].toUpperCase()+tab.slice(1)}</button>)}</div>
-    {(view==='registrations'||view==='feedback'||view==='analytics')&&<label className="archiveToggle"><input type="checkbox" checked={showArchive} onChange={e=>setShowArchive(e.target.checked)}/> Include archived records</label>}
-    {view==='overview'&&<div className="insightGrid"><section className="tableCard"><h2>Upcoming distribution</h2>{dates.filter(item=>item.date>=today).slice(0,2).map(item=><p key={item.date}>{labelDate(item.date)} · {item.time}</p>)}</section><section className="tableCard"><h2>Current cycle</h2><p>{active.length} registrations · total family size {totalFamilyMembers}</p><p>{activeSurveys.length} feedback responses</p><button className="secondary" onClick={archiveNow}>Archive current data</button></section></div>}
-    {view==='registrations'&&<div className="tableCard"><div className="tableHead"><h2>Registrants ({filteredRegistrations.length})</h2><div className="search"><Search size={16}/><input placeholder="Search name, phone or email" value={query} onChange={e=>setQuery(e.target.value)}/></div></div>
-      <div className="tableScroll"><table><thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Family Size</th><th>Food options</th><th>Distribution</th><th>Registered</th><th>State</th></tr></thead>
-        <tbody>{filteredRegistrations.map(registration=><tr key={registration.id}><td><b>{registration.first_name}</b></td><td>{registration.phone}</td><td>{registration.email||'—'}</td><td>{registration.family_size}</td><td>{registration.food_options?.join(', ')||'—'}</td><td>{registration.distribution_date||'—'}</td><td>{new Date(registration.created_at).toLocaleDateString()}</td><td>{registration.archived_at?'Archived':'Active'}</td></tr>)}
-          {!filteredRegistrations.length&&<tr><td colSpan={8} className="empty">{loading?'Loading registrations…':'No registrations found.'}</td></tr>}</tbody>
-      </table></div></div>}
-    {view==='feedback'&&<div className="tableCard"><h2>Feedback ({visibleSurveys.length})</h2><div className="feedbackList">{visibleSurveys.map(item=><article key={item.id}><div><b>{item.experience}</b><span>{item.rating} / 5 stars · {new Date(item.created_at).toLocaleDateString()} {item.archived_at?'· Archived':''}</span></div><p>{item.comments||'No food item specified.'}</p></article>)}{!visibleSurveys.length&&<p>No feedback yet.</p>}</div></div>}
-    {view==='analytics'&&<div className="insightGrid">
-      <Breakdown title="Distribution date" rows={countBy((showArchive?registrations:active).map(item=>item.distribution_date||'Unspecified'))}/>
-      <Breakdown title="Food options" rows={countBy((showArchive?registrations:active).flatMap(item=>item.food_options||[]))}/>
-      <Breakdown title="Family size" rows={countBy((showArchive?registrations:active).map(item=>String(item.family_size)))}/>
-      <Breakdown title="Experience" rows={countBy(visibleSurveys.map(item=>item.experience))}/>
-      <Breakdown title="Rating" rows={countBy(visibleSurveys.map(item=>String(item.rating)))}/>
-      <Breakdown title="First vs third Saturday" rows={countBy((showArchive?registrations:active).map(item=>{const month=item.distribution_date?.slice(0,7)||'';return item.distribution_date===dates.find(date=>date.month===month&&date.slot===1)?.date?'First Saturday':'Third Saturday';}))}/>
-      <Breakdown title="Name" rows={countBy((showArchive?registrations:active).map(item=>item.first_name))}/>
-      <Breakdown title="Contact provided" rows={countBy((showArchive?registrations:active).map(item=>item.email?'Email and phone':'Phone only'))}/>
-      <Breakdown title="Requested food items" rows={countBy(visibleSurveys.map(item=>item.comments?.trim()||'No answer'))}/>
+    <div className="adminTabs">{(['overview','registrations','feedback','analytics','schedule','archive'] as const).map(tab=><button key={tab} className={view===tab?'active':''} onClick={()=>setView(tab)}>{tab[0].toUpperCase()+tab.slice(1)}</button>)}</div>
+    {view==='overview'&&<div className="insightGrid"><section className="tableCard"><h2>Upcoming distribution</h2>{dates.filter(item=>item.date>=today).slice(0,2).map(item=><p key={item.date}>{labelDate(item.date)} · {item.time}</p>)}</section><section className="tableCard"><h2>Current cycle</h2><p>{active.length} registrations · total family size {totalFamilyMembers}</p><p>{activeSurveys.length} feedback responses</p><button className="secondary" onClick={()=>{setQuery('');setView('archive');}}>View archive ({archivedRegistrations.length} registrations · {archivedSurveys.length} feedback)</button></section></div>}
+    {view==='registrations'&&<RegistrationList records={filteredRegistrations} query={query} onQuery={setQuery} loading={loading}/>}
+    {view==='feedback'&&<FeedbackList records={activeSurveys}/>}
+    {view==='archive'&&<div className="archiveContent">
+      <section className="tableCard archiveIntro"><h2>Archive</h2><p>Archived registrations and feedback are kept here, separate from current lists and totals.</p><p>{archivedRegistrations.length} registrations · {archivedSurveys.length} feedback responses</p></section>
+      <RegistrationList records={filteredRegistrations} query={query} onQuery={setQuery} loading={loading} archived/>
+      <FeedbackList records={archivedSurveys} archived/>
     </div>}
-    {view==='schedule'&&<div className="tableCard"><h2>Distribution dates</h2><p>Default dates are the first and third Saturdays. The third date opens at midnight on the day after the first distribution.</p><div className="dateEditor">{dates.map(item=><div key={`${item.month}-${item.slot}`}><label>{item.month} · {item.slot===1?'First':'Third'} Saturday<input type="date" value={editDates[`${item.month}-${item.slot}`]||item.date} onChange={e=>setEditDates({...editDates,[`${item.month}-${item.slot}`]:e.target.value})}/></label><button className="secondary" onClick={()=>saveDate(item)}>Save date</button></div>)}</div></div>}
+    {view==='analytics'&&<div className="insightGrid">
+      <Breakdown title="First name" rows={countBy(active.map(item=>item.first_name))}/>
+      <Breakdown title="Last name" rows={countBy(active.map(item=>item.last_name||'Not recorded'))}/>
+      <Breakdown title="Family size" rows={countBy(active.map(item=>String(item.family_size)))}/>
+      <Breakdown title="Distribution date" rows={countBy(active.map(item=>item.distribution_date||'Not recorded'))}/>
+      <Breakdown title="Experience" rows={countBy(activeSurveys.map(item=>item.experience))}/>
+      <Breakdown title="Rating" rows={countBy(activeSurveys.map(item=>String(item.rating)))}/>
+      <Breakdown title="Requested food items" rows={countBy(activeSurveys.map(item=>item.comments?.trim()||'No answer'))}/>
+    </div>}
+    {view==='schedule'&&<div className="tableCard"><h2>Distribution dates</h2><p>Default dates are the first and third Saturdays. The second distribution date opens for registration at midnight after the first distribution.</p><div className="dateEditor">{dates.map(item=><div key={`${item.month}-${item.slot}`}><label>{item.month} · {item.slot===1?'First':'Third'} Saturday<input type="date" value={editDates[`${item.month}-${item.slot}`]||item.date} onChange={e=>setEditDates({...editDates,[`${item.month}-${item.slot}`]:e.target.value})}/></label><button className="secondary" onClick={()=>saveDate(item)}>Save date</button></div>)}</div></div>}
   </main>;
+}
+
+function RegistrationList({records,query,onQuery,loading,archived=false}:{records:Registration[];query:string;onQuery:(value:string)=>void;loading:boolean;archived?:boolean}){
+  return <section className="tableCard"><div className="tableHead"><h2>{archived?'Archived registrants':'Registrants'} ({records.length})</h2><div className="search"><Search size={16}/><input aria-label={archived?'Search archived registrations':'Search registrations'} placeholder="Search first or last name" value={query} onChange={e=>onQuery(e.target.value)}/></div></div>
+    <div className="tableScroll"><table><thead><tr><th>First name</th><th>Last name</th><th>Family Size</th><th>Distribution date</th><th>Registered</th>{archived&&<th>Archived</th>}</tr></thead>
+      <tbody>{records.map(registration=><tr key={registration.id}><td><b>{registration.first_name}</b></td><td>{registration.last_name||'—'}</td><td>{registration.family_size}</td><td>{registration.distribution_date?labelDate(registration.distribution_date):'Not recorded'}</td><td>{new Date(registration.created_at).toLocaleDateString()}</td>{archived&&<td>{registration.archived_at?new Date(registration.archived_at).toLocaleDateString():'—'}</td>}</tr>)}
+        {!records.length&&<tr><td colSpan={archived?6:5} className="empty">{loading?'Loading registrations…':archived?'No archived registrations.':'No registrations found.'}</td></tr>}</tbody>
+    </table></div>
+  </section>;
+}
+
+function FeedbackList({records,archived=false}:{records:Survey[];archived?:boolean}){
+  return <section className="tableCard"><h2>{archived?'Archived feedback':'Feedback'} ({records.length})</h2><div className="feedbackList">{records.map(item=><article key={item.id}><div><b>{item.experience}</b><span>{item.rating} / 5 stars · {new Date(item.created_at).toLocaleDateString()}{archived&&item.archived_at?` · Archived ${new Date(item.archived_at).toLocaleDateString()}`:''}</span></div><p>{item.comments||'No food item specified.'}</p></article>)}{!records.length&&<p>{archived?'No archived feedback.':'No feedback yet.'}</p>}</div></section>;
 }
 
 function Breakdown({title,rows}:{title:string;rows:[string,number][]}){return <section className="tableCard breakdown"><h2>{title}</h2>{rows.length?rows.map(([name,count])=><div key={name}><span>{name}</span><strong>{count}</strong></div>):<p>No entries yet.</p>}</section>}
