@@ -7,6 +7,7 @@ import {
   Archive, Trash2, ShieldCheck, Users, Utensils, X,
 } from 'lucide-react';
 import './styles.css';
+import {availableDistributions,distributionCutoff,distributionTime,localDay,highlightParts,type Distribution} from './schedule';
 
 type Page = 'home' | 'register' | 'survey' | 'admin' | 'success';
 
@@ -21,39 +22,33 @@ type Survey = {
   comments: string | null; archived_at: string | null;
 };
 
-type Distribution = { month: string; slot: number; date: string; time: string };
-function todayLagos() { const parts=new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Lagos',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()); const part=(name:string)=>parts.find(item=>item.type===name)!.value; return `${part('year')}-${part('month')}-${part('day')}`; }
+
 function defaults(month:string):Distribution[] {
   const [year,n]=month.split('-').map(Number);
   const first=1+(6-new Date(Date.UTC(year,n-1,1)).getUTCDay()+7)%7;
-  return [first,first+14].map((day,i)=>({month,slot:i+1,date:`${month}-${String(day).padStart(2,'0')}`,time:'10:00 AM – 1:00 PM'}));
+  return [first,first+14].map((day,i)=>({month,slot:i+1,date:`${month}-${String(day).padStart(2,'0')}`,time:distributionTime}));
 }
 function labelDate(date:string) { return new Date(`${date}T12:00:00Z`).toLocaleDateString('en-NG',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'}); }
-function availableDistributions(dates:Distribution[],today:string) {
-  return dates.filter(item=>{
-    const first=dates.find(row=>row.month===item.month&&row.slot===1);
-    return item.date>=today && (item.slot===1 || (!!first && today>first.date));
-  }).sort((a,b)=>a.date.localeCompare(b.date));
-}
 function useSchedule() {
-  const [today,setToday]=useState(todayLagos()); const [dates,setDates]=useState<Distribution[]>([]);
+  const [now,setNow]=useState(Date.now()); const [timeZone,setTimeZone]=useState('Africa/Lagos'); const today=localDay(now,timeZone); const [dates,setDates]=useState<Distribution[]>([]);
   const [scheduleVersion,setScheduleVersion]=useState(0);
   useEffect(()=>{
-    const refresh=()=>{setToday(todayLagos());setScheduleVersion(version=>version+1);};
-    const timer=setInterval(()=>setToday(todayLagos()),60000);
+    const refresh=()=>{setNow(Date.now());setScheduleVersion(version=>version+1);};
+    const timer=setInterval(()=>setNow(Date.now()),1000);
     window.addEventListener('pantry-schedule-updated',refresh);window.addEventListener('focus',refresh);
     return()=>{clearInterval(timer);window.removeEventListener('pantry-schedule-updated',refresh);window.removeEventListener('focus',refresh);};
   },[]);
+  useEffect(()=>{let active=true;if(supabase)supabase.from('food_pantry_settings').select('timezone').eq('id',1).single().then(({data})=>{if(active&&data?.timezone)setTimeZone(data.timezone);});return()=>{active=false;};},[scheduleVersion]);
   useEffect(()=>{let active=true;const month=today.slice(0,7);
     const next=new Date(`${month}-01T12:00:00Z`);next.setUTCMonth(next.getUTCMonth()+1);
     const months=[month,next.toISOString().slice(0,7)];
     (async()=>{let items=months.flatMap(defaults);
       if(supabase){const {data}=await supabase.from('distribution_dates').select('month,slot,date,time').in('month',months);
         if(data)items=items.map(item=>data.find(row=>row.month===item.month&&row.slot===item.slot)||item);}
-      if(active)setDates(items);
+      if(active)setDates(items.map(item=>({...item,time:distributionTime})));
     })();return()=>{active=false};
   },[today,scheduleVersion]);
-  return {today,dates,setDates};
+  return {today,now,dates,setDates,timeZone,setTimeZone};
 }
 function Brand(){return <><img className="brandmark" src="/rccg-logo.png" alt="RCCG logo"/><span><b>RCCG</b><small>SOLUTION CENTER FOR ALL NATIONS · FOOD PANTRY</small></span></>}
 
@@ -61,7 +56,7 @@ function App() {
   const [page, setPage] = useState<Page>('home');
   const [mobile, setMobile] = useState(false);
   const [registeredId, setRegisteredId] = useState('');
-  const {today,dates}=useSchedule();
+  const {now,dates,timeZone}=useSchedule();
   const go = (nextPage: Page) => {
     setPage(nextPage); setMobile(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -82,27 +77,27 @@ function App() {
       </nav>
     </div></header>
 
-    {page === 'home' && <Home go={go} dates={dates} today={today}/>}
-    {page === 'register' && <Register dates={dates} today={today} onDone={(id) => { setRegisteredId(id); go('success'); }}/>}
+    {page === 'home' && <Home go={go} dates={dates} timeZone={timeZone}/>}
+    {page === 'register' && <Register dates={dates} now={now} timeZone={timeZone} onDone={(id) => { setRegisteredId(id); go('success'); }}/>}
     {page === 'success' && <main className="success"><HeartHandshake size={54}/><h1>Registration complete.</h1><p>Thank you. We look forward to seeing you on your selected distribution date.</p><button className="primary" onClick={()=>go('survey')}>Share feedback <ChevronRight/></button></main>}
     {page === 'survey' && <SurveyForm registrationId={registeredId}/>}
     {page === 'admin' && <Admin/>}
 
     <footer>
       <div className="footerBrand"><Brand/><p>Serving our neighbors with dignity, care and practical support.</p></div>
-      <div><b>Distribution</b><p>See the current pantry schedule above.</p></div>
+      <div><b>Distribution</b><p>See the current food pantry schedule above.</p></div>
       <div className="copyright">© {new Date().getFullYear()} RCCGSC. All rights reserved.</div>
     </footer>
   </>;
 }
 
-function Home({ go, dates, today }: { go: (page: Page) => void; dates: Distribution[]; today:string }) {
+function Home({ go, dates,timeZone }: { go: (page: Page) => void; dates: Distribution[];timeZone:string }) {
   return <main>
     <section className="hero">
       <div className="heroText">
         <span className="eyebrow">RCCGSC COMMUNITY SUPPORT</span>
         <h1>Food support, delivered with <em>dignity.</em></h1>
-        <p>Register for an upcoming pantry distribution, tell us what your household needs, and help us improve the experience for our neighbors.</p>
+        <p>Register for an upcoming food pantry distribution, tell us what your household needs, and help us improve the experience for our neighbors.</p>
         <div className="actions">
           <button className="primary" onClick={() => go('register')}>Register for distribution <ChevronRight/></button>
           <button className="secondary" onClick={() => go('survey')}>Share feedback</button>
@@ -110,14 +105,14 @@ function Home({ go, dates, today }: { go: (page: Page) => void; dates: Distribut
       </div>
       <div className="heroCard">
         <HeartHandshake size={36}/><h3>You're welcome here.</h3>
-        <p>Our pantry is here to support individuals and families in our community.</p>
+        <p>Our food pantry is here to support individuals and families in our community.</p>
         <div className="mini"><CalendarDays/><span><b>Next distribution</b><br/>Check the schedule below</span></div>
       </div>
     </section>
 
     <section className="section">
-      <div className="sectionHead"><span className="eyebrow">PANTRY SCHEDULE</span><h2>Plan your visit</h2><p>Check the upcoming distribution dates before your visit.</p></div>
-      <div className="schedule">{dates.filter(item=>item.date>=today).slice(0,2).map(item=><div className="scheduleCard" key={item.date}><div className="dateIcon"><CalendarDays/></div><div><b>{item.slot===1?'First':'Third'} Saturday</b><h3>{labelDate(item.date)}</h3><p>{item.time}</p></div></div>)}</div>
+      <div className="sectionHead"><span className="eyebrow">FOOD PANTRY SCHEDULE</span><h2>Plan your visit</h2><p>Check the upcoming distribution dates before your visit.</p></div>
+      <div className="schedule">{dates.filter(item=>distributionCutoff(item.date,timeZone)>Date.now()).slice(0,2).map(item=><div className="scheduleCard" key={item.date}><div className="dateIcon"><CalendarDays/></div><div><b>{item.slot===1?'First':'Third'} Saturday</b><h3>{labelDate(item.date)}</h3><p>{item.time}</p></div></div>)}</div>
     </section>
 
     <section className="blueBand">
@@ -130,16 +125,16 @@ function Home({ go, dates, today }: { go: (page: Page) => void; dates: Distribut
     </section>
 
     <section className="section two">
-      <div className="info"><Utensils size={30}/><h2>Help us understand what families need.</h2><p>Food preferences and feedback help the pantry plan quantities and make future distributions more useful.</p><button className="textBtn" onClick={() => go('survey')}>Complete feedback <ChevronRight/></button></div>
-      <div className="info pale"><Users size={30}/><h2>Managing the pantry?</h2><p>Authorized coordinators can securely view registrations, family counts, feedback and insights.</p><button className="textBtn" onClick={() => go('admin')}>Open admin dashboard <ChevronRight/></button></div>
+      <div className="info"><Utensils size={30}/><h2>Help us understand what families need.</h2><p>Food preferences and feedback help the food pantry plan quantities and make future distributions more useful.</p><button className="textBtn" onClick={() => go('survey')}>Complete feedback <ChevronRight/></button></div>
+      <div className="info pale"><Users size={30}/><h2>Managing the food pantry?</h2><p>Authorized coordinators can securely view registrations, family counts, feedback and insights.</p><button className="textBtn" onClick={() => go('admin')}>Open admin dashboard <ChevronRight/></button></div>
     </section>
   </main>;
 }
 
-function Register({ onDone, dates, today }: { onDone: (id: string) => void; dates:Distribution[]; today:string }) {
+function Register({ onDone, dates, now,timeZone }: { onDone: (id: string) => void; dates:Distribution[]; now:number;timeZone:string }) {
   const [form,setForm]=useState({first_name:'',last_name:'',family_size:'',distribution_date:''});
   const [loading,setLoading]=useState(false); const [message,setMessage]=useState('');
-  const availableDates=useMemo(()=>availableDistributions(dates,today),[dates,today]);
+  const availableDates=useMemo(()=>availableDistributions(dates,now,timeZone),[dates,now,timeZone]);
   useEffect(()=>{
     setForm(current=>current.distribution_date && !availableDates.some(item=>item.date===current.distribution_date)
       ? {...current,distribution_date:''}:current);
@@ -150,7 +145,7 @@ function Register({ onDone, dates, today }: { onDone: (id: string) => void; date
     if(!firstName || !lastName){setMessage('Please enter your first name and last name.');return;}
     const familySize=Number(form.family_size);
     if(!Number.isInteger(familySize) || familySize<1 || familySize>30){setMessage('Please select your family size.');return;}
-    if(!availableDates.some(item=>item.date===form.distribution_date)){setMessage('Please select an available distribution date.');return;}
+    if(!availableDistributions(dates,Date.now(),timeZone).some(item=>item.date===form.distribution_date)){setMessage('Please select an available distribution date.');return;}
     setLoading(true);
     if (!supabase) { setMessage('Connect Supabase using .env.local before submitting.'); setLoading(false); return; }
     const id=crypto.randomUUID();
@@ -165,7 +160,7 @@ function Register({ onDone, dates, today }: { onDone: (id: string) => void; date
   }
   return <main className="formPage"><div className="formWrap">
     <span className="eyebrow">REGISTRATION</span><h1>Register for food distribution</h1>
-    <p className="lead">Please provide accurate information so the pantry team can plan for your household.</p>
+    <p className="lead">Please provide accurate information so the food pantry team can plan for your household.</p>
     <form onSubmit={submit}>
       <div className="grid2">
         <label>First name<input required maxLength={100} autoComplete="given-name" value={form.first_name} onChange={e=>setForm({...form,first_name:e.target.value})}/></label>
@@ -176,12 +171,12 @@ function Register({ onDone, dates, today }: { onDone: (id: string) => void; date
           <option value="">Select your family size</option>
           {Array.from({length:30},(_,i)=>i+1).map(size=><option key={size} value={size}>{size}</option>)}
         </select></label>
-        <label>Preferred Distribution Date<select required disabled={!availableDates.length} value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
+        <p className="scheduleTimezone">Distribution: 10am–12pm · {timeZone}. Registration closes at noon and the next date opens immediately.</p><label>Preferred Distribution Date<select required disabled={!availableDates.length} value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
           <option value="">Select a date</option>
           {availableDates.map(item=><option key={item.date} value={item.date}>{labelDate(item.date)} · {item.time}</option>)}
         </select></label>
       </div>
-      <div className="notice"><ShieldCheck size={18}/><span>Your information is used by the pantry team for distribution and planning only!</span></div>
+      <div className="notice"><ShieldCheck size={18}/><span>Your information is used by the food pantry team for distribution and planning only!</span></div>
       {message&&<div className="error" role="alert">{message}</div>}
       <button className="primary full" disabled={loading||!availableDates.length} type="submit">{loading?'Submitting…':'Complete registration'} <ChevronRight/></button>
     </form>
@@ -199,7 +194,7 @@ function SurveyForm({ registrationId }: { registrationId: string }) {
     const {error}=await supabase.from('surveys').insert({registration_id:registrationId||null,rating,experience,preferences:[],comments:comments||null});
     if(error){setMessage(error.message);setLoading(false);return;} setDone(true);setLoading(false);
   }
-  if(done)return <main className="success"><MessageSquareHeart size={54}/><h1>Thank you for your feedback.</h1><p>Your response helps the pantry team improve future distributions and plan around community needs.</p></main>;
+  if(done)return <main className="success"><MessageSquareHeart size={54}/><h1>Thank you for your feedback.</h1><p>Your response helps the food pantry team improve future distributions and plan around community needs.</p></main>;
   return <main className="formPage"><div className="formWrap">
     <span className="eyebrow">COMMUNITY FEEDBACK</span><h1>How was your experience?</h1><p className="lead">A few quick questions. Your feedback helps us serve you better.</p>
     <form onSubmit={submit}>
@@ -222,7 +217,8 @@ function Admin() {
   const [dataAction,setDataAction]=useState<'archive'|'reset'|null>(null);
   const [actionMessage,setActionMessage]=useState('');
   const loadVersion=React.useRef(0);
-  const {dates,today,setDates}=useSchedule();
+  const {dates,setDates,timeZone,setTimeZone}=useSchedule();
+  const [zoneEdit,setZoneEdit]=useState<string|null>(null);
   const [editDates,setEditDates]=useState<Record<string,string>>({});
 
   useEffect(()=>{if(!supabase)return;supabase.auth.getSession().then(({data})=>setSession(data.session));
@@ -290,6 +286,8 @@ function Admin() {
     window.dispatchEvent(new Event('pantry-schedule-updated'));
   }
 
+  async function saveTimeZone(){if(!supabase)return;const zone=zoneEdit?.trim()||timeZone;try{new Intl.DateTimeFormat('en',{timeZone:zone}).format();}catch{setError('Enter a valid IANA time zone, for example America/New_York.');return;}const {error}=await supabase.from('food_pantry_settings').upsert({id:1,timezone:zone});if(error){setError(error.message);return;}setTimeZone(zone);setZoneEdit(null);setError('');setActionMessage('Food Pantry time zone updated.');window.dispatchEvent(new Event('pantry-schedule-updated'));}
+
   function exportCSV(){
     const rows=[['First name','Last name','Family Size','Preferred Distribution Date','Registered','Archived'],
       ...(view==='archive'?archivedRegistrations:active).map(registration=>[
@@ -305,7 +303,7 @@ function Admin() {
 
   if(!session)return <main className="loginPage"><div className="loginCard">
     <div className="brandBig"><Brand/></div>
-    <h1>Admin sign in</h1><p>Authorized pantry coordinators only.</p>
+    <h1>Admin sign in</h1><p>Authorized food pantry coordinators only.</p>
     <form onSubmit={login}>
       <label>Email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label>
       <label>Password<input type="password" required value={password} onChange={e=>setPassword(e.target.value)}/></label>
@@ -315,7 +313,7 @@ function Admin() {
   </div></main>;
 
   return <main className="adminPage">
-    <div className="adminTop"><div><span className="eyebrow">PANTRY ADMINISTRATION</span><h1>Dashboard</h1></div>
+    <div className="adminTop"><div><span className="eyebrow">FOOD PANTRY ADMINISTRATION</span><h1>Dashboard</h1></div>
       <div className="adminActions">
         <button className="secondary" onClick={()=>manageData('archive')} disabled={!!dataAction || loading || (!active.length&&!activeSurveys.length)}><Archive size={16}/>{dataAction==='archive'?'Archiving…':'Archive current data'}</button>
         <button className="secondary danger" onClick={()=>manageData('reset')} disabled={!!dataAction || loading || (!registrations.length&&!surveys.length)}><Trash2 size={16}/>{dataAction==='reset'?'Resetting…':'Reset all data'}</button>
@@ -331,7 +329,7 @@ function Admin() {
       <div><ClipboardList/><span>Avg. rating</span><strong>{averageRating}</strong></div>
     </div>
     <div className="adminTabs">{(['overview','registrations','feedback','analytics','schedule','archive'] as const).map(tab=><button key={tab} className={view===tab?'active':''} onClick={()=>setView(tab)}>{tab[0].toUpperCase()+tab.slice(1)}</button>)}</div>
-    {view==='overview'&&<div className="insightGrid"><section className="tableCard"><h2>Upcoming distribution</h2>{dates.filter(item=>item.date>=today).slice(0,2).map(item=><p key={item.date}>{labelDate(item.date)} · {item.time}</p>)}</section><section className="tableCard"><h2>Current cycle</h2><p>{active.length} registrations · total family size {totalFamilyMembers}</p><p>{activeSurveys.length} feedback responses</p><button className="secondary" onClick={()=>{setQuery('');setView('archive');}}>View archive ({archivedRegistrations.length} registrations · {archivedSurveys.length} feedback)</button></section></div>}
+    {view==='overview'&&<div className="insightGrid"><section className="tableCard"><h2>Upcoming distribution</h2>{dates.filter(item=>distributionCutoff(item.date,timeZone)>Date.now()).slice(0,2).map(item=><p key={item.date}>{labelDate(item.date)} · {item.time}</p>)}</section><section className="tableCard"><h2>Current cycle</h2><p>{active.length} registrations · total family size {totalFamilyMembers}</p><p>{activeSurveys.length} feedback responses</p><button className="secondary" onClick={()=>{setQuery('');setView('archive');}}>View archive ({archivedRegistrations.length} registrations · {archivedSurveys.length} feedback)</button></section></div>}
     {view==='registrations'&&<RegistrationList records={filteredRegistrations} query={query} onQuery={setQuery} loading={loading}/>}
     {view==='feedback'&&<FeedbackList records={activeSurveys}/>}
     {view==='archive'&&<div className="archiveContent">
@@ -348,14 +346,16 @@ function Admin() {
       <Breakdown title="Rating" rows={countBy(activeSurveys.map(item=>String(item.rating)))}/>
       <Breakdown title="Requested food items" rows={countBy(activeSurveys.map(item=>item.comments?.trim()||'No answer'))}/>
     </div>}
-    {view==='schedule'&&<div className="tableCard"><h2>Distribution dates</h2><p>Default dates are the first and third Saturdays. The second distribution date opens for registration at midnight after the first distribution.</p><div className="dateEditor">{dates.map(item=><div key={`${item.month}-${item.slot}`}><label>{item.month} · {item.slot===1?'First':'Third'} Saturday<input type="date" value={editDates[`${item.month}-${item.slot}`]||item.date} onChange={e=>setEditDates({...editDates,[`${item.month}-${item.slot}`]:e.target.value})}/></label><button className="secondary" onClick={()=>saveDate(item)}>Save date</button></div>)}</div></div>}
+    {view==='schedule'&&<div className="tableCard"><h2>Distribution dates</h2><label>Food Pantry time zone<input list="food-pantry-timezones" value={zoneEdit??timeZone} onChange={e=>setZoneEdit(e.target.value)} placeholder="America/New_York"/></label><datalist id="food-pantry-timezones">{['Africa/Lagos','America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Europe/London','UTC'].map(zone=><option key={zone} value={zone}/>)}</datalist><button className="secondary" onClick={saveTimeZone}>Save time zone</button><p>Default dates are the first and third Saturdays. Distribution runs from 10am to 12pm. Registration for a date closes at 12 noon, and the next distribution date opens immediately. The selected time zone is {timeZone}.</p><div className="dateEditor">{dates.map(item=><div key={`${item.month}-${item.slot}`}><label>{item.month} · {item.slot===1?'First':'Third'} Saturday<input type="date" value={editDates[`${item.month}-${item.slot}`]||item.date} onChange={e=>setEditDates({...editDates,[`${item.month}-${item.slot}`]:e.target.value})}/></label><button className="secondary" onClick={()=>saveDate(item)}>Save date</button></div>)}</div></div>}
   </main>;
 }
+
+function SearchHighlight({text,query}:{text:string;query:string}){return <>{highlightParts(text,query).map((part,index)=>part.matched?<mark key={index}>{part.text}</mark>:<React.Fragment key={index}>{part.text}</React.Fragment>)}</>;}
 
 function RegistrationList({records,query,onQuery,loading,archived=false}:{records:Registration[];query:string;onQuery:(value:string)=>void;loading:boolean;archived?:boolean}){
   return <section className="tableCard"><div className="tableHead"><h2>{archived?'Archived registrants':'Registrants'} ({records.length})</h2><div className="search"><Search size={16}/><input aria-label={archived?'Search archived registrations':'Search registrations'} placeholder="Search first or last name" value={query} onChange={e=>onQuery(e.target.value)}/></div></div>
     <div className="tableScroll"><table><thead><tr><th>First name</th><th>Last name</th><th>Family Size</th><th>Distribution date</th><th>Registered</th>{archived&&<th>Archived</th>}</tr></thead>
-      <tbody>{records.map(registration=><tr key={registration.id}><td><b>{registration.first_name}</b></td><td>{registration.last_name||'—'}</td><td>{registration.family_size}</td><td>{registration.distribution_date?labelDate(registration.distribution_date):'Not recorded'}</td><td>{new Date(registration.created_at).toLocaleDateString()}</td>{archived&&<td>{registration.archived_at?new Date(registration.archived_at).toLocaleDateString():'—'}</td>}</tr>)}
+      <tbody>{records.map(registration=><tr key={registration.id}><td><b><SearchHighlight text={registration.first_name} query={query}/></b></td><td><SearchHighlight text={registration.last_name||'—'} query={query}/></td><td>{registration.family_size}</td><td>{registration.distribution_date?labelDate(registration.distribution_date):'Not recorded'}</td><td>{new Date(registration.created_at).toLocaleDateString()}</td>{archived&&<td>{registration.archived_at?new Date(registration.archived_at).toLocaleDateString():'—'}</td>}</tr>)}
         {!records.length&&<tr><td colSpan={archived?6:5} className="empty">{loading?'Loading registrations…':archived?'No archived registrations.':'No registrations found.'}</td></tr>}</tbody>
     </table></div>
   </section>;

@@ -9,3 +9,6 @@
 
 /* Keep both registration dropdowns inside their responsive grid cells. */
 .formWrap .grid2>label{min-width:0}.formWrap select{min-width:0;max-width:100%}
+
+/* Search matches are text nodes, never injected HTML. */
+mark{background:#ffe28a;color:#171717;border-radius:3px;padding:1px 2px;box-decoration-break:clone}
