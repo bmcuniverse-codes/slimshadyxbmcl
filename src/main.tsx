@@ -171,7 +171,7 @@ function Register({ onDone, dates, now,timeZone }: { onDone: (id: string) => voi
           <option value="">Select your family size</option>
           {Array.from({length:30},(_,i)=>i+1).map(size=><option key={size} value={size}>{size}</option>)}
         </select></label>
-        <p className="scheduleTimezone">Distribution: 10am–12pm · {timeZone}. Registration closes at noon and the next date opens immediately.</p><label>Preferred Distribution Date<select required disabled={!availableDates.length} value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
+        <label>Preferred Distribution Date<select required disabled={!availableDates.length} value={form.distribution_date} onChange={e=>setForm({...form,distribution_date:e.target.value})}>
           <option value="">Select a date</option>
           {availableDates.map(item=><option key={item.date} value={item.date}>{labelDate(item.date)} · {item.time}</option>)}
         </select></label>
